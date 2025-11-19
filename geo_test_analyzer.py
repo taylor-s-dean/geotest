@@ -698,7 +698,7 @@ def create_method_chart(method_name: str, result: Dict, df: pd.DataFrame,
     pct_padding = pct_range * 0.1 if pct_range > 0 else 1
     
     p.extra_y_ranges = {"pct_change": Range1d(start=pct_min - pct_padding, end=pct_max + pct_padding)}
-    pct_axis = LinearAxis(y_range_name="pct_change", axis_label="% Change")
+    pct_axis = LinearAxis(y_range_name="pct_change", axis_label="Lift (%)")
     p.add_layout(pct_axis, 'right')
     
     # Plot control and test lines on main y-axis
@@ -711,9 +711,9 @@ def create_method_chart(method_name: str, result: Dict, df: pd.DataFrame,
     p.line('date', 'counterfactual', source=source, legend_label='Counterfactual (Expected Test)', 
            line_width=2, color=counterfactual_color, line_dash='dotted', alpha=0.8)
     
-    # Plot % change on secondary y-axis
+    # Plot lift on secondary y-axis
     pct_color = '#9467bd' if not dark_mode else '#c5b0d5'  # Purple color
-    p.line('date', 'pct_dev', source=source, legend_label='% Change', 
+    p.line('date', 'pct_dev', source=source, legend_label='Lift (%)', 
            line_width=1.5, color=pct_color, alpha=0.7, y_range_name="pct_change", line_dash='dashed')
     
     # Add confidence interval band and significance shading (for experiment period only)
@@ -797,7 +797,7 @@ def create_method_chart(method_name: str, result: Dict, df: pd.DataFrame,
             <div><strong>Test:</strong> @test{{0,0}}</div>
             <div><strong>Counterfactual:</strong> @counterfactual{{0,0}}</div>
             <div><strong>Control:</strong> @control{{0,0}}</div>
-            <div><strong>% Change:</strong> @pct_dev{{+0.1f}}%</div>
+            <div><strong>Lift:</strong> @pct_dev{{+0.1f}}%</div>
             <hr style="margin: 5px 0; border-color: {tooltip_border};">
             <div><strong>P-value:</strong> @p_value{{0.4f}}</div>
             <div><strong>Power:</strong> @power{{0.3f}}</div>
