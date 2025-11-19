@@ -881,11 +881,11 @@ def create_visualization(df: pd.DataFrame, pre_period: pd.DataFrame, exp_period:
         method_layout = row(chart, table)
         
         # Combine title and chart/table
-        full_layout = column(title_div, method_layout, sizing_mode='fixed')
+        full_layout = column(title_div, method_layout)
         charts.append(full_layout)
     
     # Add spacing between charts and combine all charts vertically
-    final_layout = column(*charts, sizing_mode='fixed')
+    final_layout = column(*charts)
     
     # Save with custom template for dark mode
     output_file(output_path)
