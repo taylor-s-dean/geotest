@@ -20,7 +20,8 @@ import numpy as np
 from scipy import stats
 from dateutil import parser as date_parser
 from bokeh.plotting import figure, output_file, save
-from bokeh.models import HoverTool, ColumnDataSource, Span, BoxAnnotation, Label
+from bokeh.models import HoverTool, ColumnDataSource, Span, BoxAnnotation, Label, Div
+from bokeh.layouts import column, row
 from bokeh.palettes import Category10
 
 # Suppress warnings for cleaner output
@@ -366,81 +367,301 @@ def bayesian_analysis(pre_period: pd.DataFrame, exp_period: pd.DataFrame,
 
 
 # ============================================================================
-# VISUALIZATION
+# VISUALIZATION HELPERS
 # ============================================================================
 
-def create_visualization(df: pd.DataFrame, pre_period: pd.DataFrame, exp_period: pd.DataFrame,
-                        results: List[Dict], pre_start: datetime, pre_end: datetime,
-                        exp_start: datetime, exp_end: datetime,
-                        alpha: float, output_path: str):
-    """Create interactive Bokeh visualization."""
-    
-    # Prepare data for plotting
-    # Ensure dates are datetime objects for proper comparison
-    dates = pd.to_datetime(df['date']).values
-    control_values = df['control'].values
-    test_values = df['test'].values
-    
-    # Calculate daily differences and pct deviation
-    daily_diff = test_values - control_values
-    daily_pct_dev = ((test_values - control_values) / control_values) * 100
-    
-    # Determine significance for each day (using rolling window or cumulative)
-    # For simplicity, we'll use cumulative analysis from exp_start
-    # Use pandas Series for proper datetime comparison
+def calculate_time_varying_stats(method_name: str, df: pd.DataFrame, pre_period: pd.DataFrame,
+                                 exp_period: pd.DataFrame, exp_start: datetime, exp_end: datetime,
+                                 alpha: float) -> Dict:
+    """Calculate time-varying statistics for a given method."""
     date_series = pd.to_datetime(df['date'])
     exp_mask = (date_series >= exp_start) & (date_series <= exp_end)
     exp_indices = np.where(exp_mask.values)[0]
     
-    # Calculate rolling p-values (simplified - using cumulative t-test)
-    daily_p_values = np.full(len(dates), np.nan)
-    daily_power = np.full(len(dates), np.nan)
-    significant_methods = [''] * len(dates)
+    n = len(df)
+    p_values = np.full(n, np.nan)
+    ci_lower = np.full(n, np.nan)
+    ci_upper = np.full(n, np.nan)
+    estimates = np.full(n, np.nan)
+    effect_sizes = np.full(n, np.nan)
+    power_values = np.full(n, np.nan)
+    is_significant = np.full(n, False)
+    
+    pre_control_mean = pre_period['control'].mean()
+    pre_test_mean = pre_period['test'].mean()
+    pre_diff = pre_test_mean - pre_control_mean
     
     for i, idx in enumerate(exp_indices):
-        # Cumulative data up to this point
         exp_subset = exp_period.iloc[:i+1] if i < len(exp_period) else exp_period
         
-        if len(exp_subset) > 1:
-            # Quick t-test for this window
-            try:
-                _, p_val = stats.ttest_ind(exp_subset['test'], exp_subset['control'])
-                daily_p_values[idx] = p_val
-                
-                # Effect size for power calculation
-                pooled_std = np.sqrt((exp_subset['control'].var() + exp_subset['test'].var()) / 2)
-                mean_diff = exp_subset['test'].mean() - exp_subset['control'].mean()
-                effect_size = mean_diff / pooled_std if pooled_std > 0 else 0
-                daily_power[idx] = calculate_power(effect_size, len(exp_subset), alpha)
-            except:
-                pass
+        if len(exp_subset) < 2:
+            continue
         
-        # Which methods are significant overall
-        sig_methods = [r['method'] for r in results if r.get('significant', False)]
-        significant_methods[idx] = ', '.join(sig_methods) if sig_methods else 'None'
+        try:
+            if method_name == 'Difference-in-Differences':
+                exp_control_mean = exp_subset['control'].mean()
+                exp_test_mean = exp_subset['test'].mean()
+                exp_diff = exp_test_mean - exp_control_mean
+                did_estimate = exp_diff - pre_diff
+                
+                # Standard error
+                pre_var = pre_period['test'].var() / len(pre_period) + pre_period['control'].var() / len(pre_period)
+                exp_var = exp_subset['test'].var() / len(exp_subset) + exp_subset['control'].var() / len(exp_subset)
+                se = np.sqrt(pre_var + exp_var)
+                
+                if se > 0:
+                    t_stat = did_estimate / se
+                    df_val = len(pre_period) + len(exp_subset) - 2
+                    p_val = 2 * (1 - stats.t.cdf(abs(t_stat), df_val))
+                    t_critical = stats.t.ppf(1 - alpha/2, df_val)
+                    ci_lower[idx] = did_estimate - t_critical * se
+                    ci_upper[idx] = did_estimate + t_critical * se
+                    estimates[idx] = did_estimate
+                    p_values[idx] = p_val
+                    is_significant[idx] = p_val < alpha
+                    
+                    pooled_std = np.sqrt((pre_period['control'].var() + pre_period['test'].var()) / 2)
+                    effect_size = did_estimate / pooled_std if pooled_std > 0 else 0
+                    effect_sizes[idx] = effect_size
+                    power_values[idx] = calculate_power(effect_size, len(exp_subset), alpha)
+            
+            elif method_name == 'Synthetic Control':
+                # Simplified synthetic control
+                control_exp = exp_subset['control'].values
+                test_exp = exp_subset['test'].values
+                treatment_effect = test_exp.mean() - control_exp.mean()
+                
+                # Simple t-test for p-value
+                _, p_val = stats.ttest_ind(test_exp, control_exp)
+                se = stats.sem(test_exp - control_exp) if len(test_exp) > 1 else np.nan
+                
+                if not np.isnan(se) and se > 0:
+                    df_val = len(exp_subset) - 1
+                    t_critical = stats.t.ppf(1 - alpha/2, df_val)
+                    ci_lower[idx] = treatment_effect - t_critical * se
+                    ci_upper[idx] = treatment_effect + t_critical * se
+                    estimates[idx] = treatment_effect
+                    p_values[idx] = p_val
+                    is_significant[idx] = p_val < alpha
+                    
+                    pooled_std = np.sqrt((exp_subset['control'].var() + exp_subset['test'].var()) / 2)
+                    effect_size = treatment_effect / pooled_std if pooled_std > 0 else 0
+                    effect_sizes[idx] = effect_size
+                    power_values[idx] = calculate_power(effect_size, len(exp_subset), alpha)
+            
+            elif method_name == 'T-test (Baseline Adjusted)':
+                pre_control_mean = pre_period['control'].mean()
+                pre_test_mean = pre_period['test'].mean()
+                
+                exp_control_adj = exp_subset['control'].values - pre_control_mean
+                exp_test_adj = exp_subset['test'].values - pre_test_mean
+                
+                _, p_val = stats.ttest_ind(exp_test_adj, exp_control_adj)
+                mean_diff = exp_test_adj.mean() - exp_control_adj.mean()
+                
+                n1, n2 = len(exp_test_adj), len(exp_control_adj)
+                se_diff = np.sqrt(exp_test_adj.var()/n1 + exp_control_adj.var()/n2)
+                df_val = n1 + n2 - 2
+                t_critical = stats.t.ppf(1 - alpha/2, df_val)
+                
+                ci_lower[idx] = mean_diff - t_critical * se_diff
+                ci_upper[idx] = mean_diff + t_critical * se_diff
+                estimates[idx] = mean_diff
+                p_values[idx] = p_val
+                is_significant[idx] = p_val < alpha
+                
+                pooled_std = np.sqrt((pre_period['control'].std()**2 + pre_period['test'].std()**2) / 2)
+                effect_size = mean_diff / pooled_std if pooled_std > 0 else 0
+                effect_sizes[idx] = effect_size
+                power_values[idx] = calculate_power(effect_size, min(n1, n2), alpha)
+            
+            elif method_name == 'Bayesian':
+                # Simplified Bayesian - use t-test approximation for time-varying
+                _, p_val = stats.ttest_ind(exp_subset['test'], exp_subset['control'])
+                mean_diff = exp_subset['test'].mean() - exp_subset['control'].mean()
+                
+                # Approximate CI
+                se = stats.sem(exp_subset['test'] - exp_subset['control'])
+                if not np.isnan(se) and se > 0:
+                    df_val = len(exp_subset) - 1
+                    t_critical = stats.t.ppf(1 - alpha/2, df_val)
+                    ci_lower[idx] = mean_diff - t_critical * se
+                    ci_upper[idx] = mean_diff + t_critical * se
+                    estimates[idx] = mean_diff
+                    p_values[idx] = p_val
+                    is_significant[idx] = p_val < alpha
+                    
+                    pooled_std = np.sqrt((exp_subset['control'].var() + exp_subset['test'].var()) / 2)
+                    effect_size = mean_diff / pooled_std if pooled_std > 0 else 0
+                    effect_sizes[idx] = effect_size
+                    power_values[idx] = calculate_power(effect_size, len(exp_subset), alpha)
+        
+        except Exception:
+            continue
     
-    # Create ColumnDataSource
-    # Convert dates to strings for tooltip display
+    return {
+        'p_values': p_values,
+        'ci_lower': ci_lower,
+        'ci_upper': ci_upper,
+        'estimates': estimates,
+        'effect_sizes': effect_sizes,
+        'power': power_values,
+        'is_significant': is_significant
+    }
+
+
+def create_summary_box(result: Dict, dark_mode: bool = False) -> Div:
+    """Create a summary box for a method's results."""
+    
+    method = result['method']
+    estimate = result.get('estimate', np.nan)
+    p_val = result.get('p_value', np.nan)
+    sig = result.get('significant', False)
+    ci_lower = result.get('ci_lower', np.nan)
+    ci_upper = result.get('ci_upper', np.nan)
+    effect_size = result.get('effect_size', np.nan)
+    power = result.get('power', np.nan)
+    
+    # Format values
+    estimate_str = f"{estimate:.4f}" if not np.isnan(estimate) else "N/A"
+    p_val_str = f"{p_val:.4f}" if not np.isnan(p_val) else "N/A"
+    sig_str = '✓ Yes' if sig else '✗ No'
+    sig_color = '#4CAF50' if sig else '#F44336'
+    ci_lower_str = f"{ci_lower:.4f}" if not np.isnan(ci_lower) else "N/A"
+    ci_upper_str = f"{ci_upper:.4f}" if not np.isnan(ci_upper) else "N/A"
+    effect_size_str = f"{effect_size:.4f}" if not np.isnan(effect_size) else "N/A"
+    power_str = f"{power:.4f}" if not np.isnan(power) else "N/A"
+    
+    # Set colors based on mode
+    if dark_mode:
+        bg_color = '#1e1e1e'
+        text_color = '#e0e0e0'
+        border_color = '#404040'
+        label_color = '#b0b0b0'
+    else:
+        bg_color = '#ffffff'
+        text_color = '#000000'
+        border_color = '#cccccc'
+        label_color = '#666666'
+    
+    # Create HTML content
+    html_content = f"""
+    <div style="background-color: {bg_color}; color: {text_color}; padding: 15px; 
+                border: 1px solid {border_color}; border-radius: 5px; 
+                font-family: monospace; font-size: 12px; width: 300px; height: 260px;">
+        <div style="margin-bottom: 12px; padding-bottom: 8px; border-bottom: 1px solid {border_color};">
+            <strong style="font-size: 13px;">Results Summary</strong>
+        </div>
+        
+        <div style="margin-bottom: 8px;">
+            <span style="color: {label_color};">Method:</span><br>
+            <strong>{method}</strong>
+        </div>
+        
+        <div style="margin-bottom: 8px;">
+            <span style="color: {label_color};">Estimate:</span> <strong>{estimate_str}</strong>
+        </div>
+        
+        <div style="margin-bottom: 8px;">
+            <span style="color: {label_color};">P-value:</span> <strong>{p_val_str}</strong>
+        </div>
+        
+        <div style="margin-bottom: 8px;">
+            <span style="color: {label_color};">Significant:</span> 
+            <strong style="color: {sig_color};">{sig_str}</strong>
+        </div>
+        
+        <div style="margin-bottom: 8px;">
+            <span style="color: {label_color};">95% CI:</span><br>
+            <strong>[{ci_lower_str}, {ci_upper_str}]</strong>
+        </div>
+        
+        <div style="margin-bottom: 8px;">
+            <span style="color: {label_color};">Effect Size:</span> <strong>{effect_size_str}</strong>
+        </div>
+        
+        <div style="margin-bottom: 8px;">
+            <span style="color: {label_color};">Power:</span> <strong>{power_str}</strong>
+        </div>
+    </div>
+    """
+    
+    summary_box = Div(text=html_content, width=320, height=280)
+    return summary_box
+
+
+def create_method_chart(method_name: str, result: Dict, df: pd.DataFrame, 
+                       pre_period: pd.DataFrame, exp_period: pd.DataFrame,
+                       pre_start: datetime, pre_end: datetime,
+                       exp_start: datetime, exp_end: datetime,
+                       alpha: float, dark_mode: bool = False) -> Tuple[figure, Div]:
+    """Create a chart for a specific statistical method."""
+    
+    # Calculate time-varying statistics
+    time_stats = calculate_time_varying_stats(method_name, df, pre_period, exp_period,
+                                             exp_start, exp_end, alpha)
+    
+    # Prepare data
+    dates = pd.to_datetime(df['date']).values
+    control_values = df['control'].values
+    test_values = df['test'].values
     date_strs = pd.to_datetime(df['date']).dt.strftime('%Y-%m-%d').values
     
+    # Calculate % change relative to expected value based on pre-period relationship
+    pre_control_mean = pre_period['control'].mean()
+    pre_test_mean = pre_period['test'].mean()
+    pre_ratio = pre_test_mean / pre_control_mean if pre_control_mean > 0 else 1.0
+    
+    # Expected test value = current control * pre-period ratio
+    expected_test = control_values * pre_ratio
+    # % change = (actual - expected) / expected * 100
+    daily_pct_dev = ((test_values - expected_test) / expected_test) * 100
+    
+    # Create source with method-specific metrics
     source = ColumnDataSource(data={
         'date': dates,
         'control': control_values,
         'test': test_values,
-        'diff': daily_diff,
         'pct_dev': daily_pct_dev,
-        'p_value': daily_p_values,
-        'power': daily_power,
-        'significant_methods': significant_methods,
-        'date_str': date_strs
+        'p_value': time_stats['p_values'],
+        'ci_lower': time_stats['ci_lower'],
+        'ci_upper': time_stats['ci_upper'],
+        'estimate': time_stats['estimates'],
+        'effect_size': time_stats['effect_sizes'],
+        'power': time_stats['power'],
+        'is_significant': time_stats['is_significant'],
+        'date_str': date_strs,
+        'sig_color': ['green' if sig else 'red' for sig in time_stats['is_significant']]
     })
+    
+    # Set colors based on mode
+    if dark_mode:
+        bg_color = '#1e1e1e'
+        grid_color = '#404040'
+        text_color = '#e0e0e0'
+        border_color = '#404040'
+        tooltip_bg = '#2d2d2d'
+        tooltip_border = '#505050'
+        control_color = '#5DA5DA'  # Lighter blue for dark mode
+        test_color = '#FAA43A'     # Lighter orange for dark mode
+    else:
+        bg_color = '#ffffff'
+        grid_color = '#e0e0e0'
+        text_color = '#000000'
+        border_color = '#cccccc'
+        tooltip_bg = 'white'
+        tooltip_border = '#ddd'
+        control_color = Category10[10][0]
+        test_color = Category10[10][1]
     
     # Create figure
     p = figure(
-        width=1200, height=700,
+        width=1000, height=500,
         x_axis_type='datetime',
-        title='Geo Test Analysis: Control vs Test Groups',
-        tools='pan,wheel_zoom,box_zoom,reset,save'
+        title=f'{method_name} Analysis',
+        tools='pan,wheel_zoom,box_zoom,reset,save',
+        background_fill_color=bg_color,
+        border_fill_color=bg_color
     )
     
     # Add period shading
@@ -449,7 +670,7 @@ def create_visualization(df: pd.DataFrame, pre_period: pd.DataFrame, exp_period:
     p.add_layout(pre_box)
     p.add_layout(exp_box)
     
-    # Get y-axis range for label positioning
+    # Get y-axis range
     y_max = max(control_values.max(), test_values.max())
     y_min = min(control_values.min(), test_values.min())
     y_range = y_max - y_min
@@ -468,43 +689,100 @@ def create_visualization(df: pd.DataFrame, pre_period: pd.DataFrame, exp_period:
     p.add_layout(exp_start_line)
     
     # Plot control and test lines
-    p.line('date', 'control', source=source, legend_label='Control', 
-           line_width=2, color=Category10[10][0])
-    p.line('date', 'test', source=source, legend_label='Test', 
-           line_width=2, color=Category10[10][1])
+    control_line = p.line('date', 'control', source=source, legend_label='Control', 
+                          line_width=2, color=control_color)
+    test_line = p.line('date', 'test', source=source, legend_label='Test', 
+                       line_width=2, color=test_color)
     
-    # Add scatter points for better interactivity
-    p.circle('date', 'control', source=source, size=4, color=Category10[10][0], alpha=0.6)
-    p.circle('date', 'test', source=source, size=4, color=Category10[10][1], alpha=0.6)
+    # Add confidence interval band and significance shading (for experiment period only)
+    exp_mask = (pd.to_datetime(df['date']) >= exp_start) & (pd.to_datetime(df['date']) <= exp_end)
+    exp_dates = dates[exp_mask]
+    exp_ci_lower = time_stats['ci_lower'][exp_mask]
+    exp_ci_upper = time_stats['ci_upper'][exp_mask]
+    exp_estimates = time_stats['estimates'][exp_mask]
+    exp_is_sig = time_stats['is_significant'][exp_mask]
     
-    # Add hover tool with proper formatting
-    hover = HoverTool(
-        tooltips=[
-            ('Date', '@date_str'),
-            ('Control', '@control{0.2f}'),
-            ('Test', '@test{0.2f}'),
-            ('% Deviation', '@pct_dev{0.2f}%'),
-            ('P-value', '@p_value{0.4f}'),
-            ('Power', '@power{0.2f}'),
-            ('Significant Methods', '@significant_methods')
-        ],
-        formatters={
-            '@p_value': 'numeral',
-            '@power': 'numeral',
-            '@pct_dev': 'numeral'
-        },
-        mode='vline'
-    )
+    # Add significance period shading
+    sig_periods = []
+    in_sig_period = False
+    sig_start = None
+    for i in range(len(exp_dates)):
+        date = exp_dates[i]
+        is_sig = exp_is_sig[i]
+        if is_sig and not in_sig_period:
+            sig_start = date
+            in_sig_period = True
+        elif not is_sig and in_sig_period:
+            if sig_start is not None and i > 0:
+                sig_periods.append((sig_start, exp_dates[i-1]))
+            in_sig_period = False
+            sig_start = None
+    if in_sig_period and sig_start is not None:
+        sig_periods.append((sig_start, exp_dates[-1]))
+    
+    for sig_start_date, sig_end_date in sig_periods:
+        sig_box = BoxAnnotation(left=sig_start_date, right=sig_end_date, 
+                               fill_alpha=0.15, fill_color='green',
+                               line_color='green', line_alpha=0.3)
+        p.add_layout(sig_box)
+    
+    # Add CI band (showing uncertainty around treatment effect)
+    valid_mask = ~(np.isnan(exp_ci_lower) | np.isnan(exp_ci_upper))
+    if np.any(valid_mask):
+        control_mean = pre_period['control'].mean()
+        # CI represents uncertainty in the treatment effect
+        # Visualize as band around expected test value (control + effect)
+        ci_y1 = control_mean + exp_ci_lower[valid_mask]
+        ci_y2 = control_mean + exp_ci_upper[valid_mask]
+        
+        ci_source = ColumnDataSource(data={
+            'date': exp_dates[valid_mask],
+            'ci_lower': exp_ci_lower[valid_mask],
+            'ci_upper': exp_ci_upper[valid_mask],
+            'estimate': exp_estimates[valid_mask],
+            'y1': ci_y1,
+            'y2': ci_y2
+        })
+        p.varea('date', y1='y1', y2='y2',
+                source=ci_source, alpha=0.2, color='gray', legend_label='95% CI (Effect)')
+    
+    # Add scatter points with color coding for significance
+    p.circle('date', 'control', source=source, size=4, color=control_color, alpha=0.6)
+    p.circle('date', 'test', source=source, size=4, color=test_color, alpha=0.6)
+    
+    # Add significance indicators on test line
+    sig_dates = dates[time_stats['is_significant']]
+    sig_test_values = test_values[time_stats['is_significant']]
+    if len(sig_dates) > 0:
+        p.diamond(sig_dates, sig_test_values, size=12, color='green', alpha=0.8, 
+                 line_color='darkgreen', line_width=2, legend_label='Significant (p<0.05)')
+    
+    # Add non-significant indicators
+    non_sig_mask = ~time_stats['is_significant'] & ~np.isnan(time_stats['p_values'])
+    non_sig_mask = non_sig_mask & exp_mask
+    if np.any(non_sig_mask):
+        non_sig_dates = dates[non_sig_mask]
+        non_sig_test_values = test_values[non_sig_mask]
+        p.diamond(non_sig_dates, non_sig_test_values, size=8, color='red', alpha=0.5,
+                 legend_label='Not Significant')
+    
+    # Single tooltip with key statistical values - attach only to test line
+    tooltips = f"""
+        <div style="background-color: {tooltip_bg}; color: {text_color}; padding: 10px; border: 1px solid {tooltip_border}; border-radius: 5px;">
+            <div style="margin-bottom: 5px;"><strong>@date_str</strong></div>
+            <hr style="margin: 5px 0; border-color: {tooltip_border};">
+            <div><strong>Test:</strong> @test{{0,0}}</div>
+            <div><strong>Control:</strong> @control{{0,0}}</div>
+            <div><strong>% Change:</strong> @pct_dev{{+0.1f}}%</div>
+            <hr style="margin: 5px 0; border-color: {tooltip_border};">
+            <div><strong>P-value:</strong> @p_value{{0.4f}}</div>
+            <div><strong>Power:</strong> @power{{0.3f}}</div>
+            <div><strong>Significant:</strong> @is_significant</div>
+        </div>
+    """
+    
+    hover = HoverTool(tooltips=tooltips, renderers=[test_line])
     p.add_tools(hover)
-    
-    # Add confidence intervals if available
-    for result in results:
-        if result.get('ci_lower') is not None and not np.isnan(result['ci_lower']):
-            method_name = result['method']
-            estimate = result['estimate']
-            
-            # Add horizontal lines for CI bounds (simplified visualization)
-            # In full implementation, would show time-varying CIs
     
     # Style
     p.xaxis.axis_label = 'Date'
@@ -512,26 +790,95 @@ def create_visualization(df: pd.DataFrame, pre_period: pd.DataFrame, exp_period:
     p.legend.location = 'top_left'
     p.legend.click_policy = 'hide'
     
-    # Add results summary as text
-    results_text = "Results Summary:\n"
+    # Apply dark mode styling
+    if dark_mode:
+        p.xgrid.grid_line_color = grid_color
+        p.ygrid.grid_line_color = grid_color
+        p.xaxis.axis_line_color = text_color
+        p.yaxis.axis_line_color = text_color
+        p.xaxis.major_tick_line_color = text_color
+        p.yaxis.major_tick_line_color = text_color
+        p.xaxis.minor_tick_line_color = text_color
+        p.yaxis.minor_tick_line_color = text_color
+        p.xaxis.major_label_text_color = text_color
+        p.yaxis.major_label_text_color = text_color
+        p.xaxis.axis_label_text_color = text_color
+        p.yaxis.axis_label_text_color = text_color
+        p.title.text_color = text_color
+        p.legend.background_fill_color = bg_color
+        p.legend.border_line_color = border_color
+        p.legend.label_text_color = text_color
+        p.outline_line_color = border_color
+    
+    # Create summary box
+    summary_box = create_summary_box(result, dark_mode)
+    
+    return p, summary_box
+
+
+# ============================================================================
+# VISUALIZATION
+# ============================================================================
+
+def create_visualization(df: pd.DataFrame, pre_period: pd.DataFrame, exp_period: pd.DataFrame,
+                        results: List[Dict], pre_start: datetime, pre_end: datetime,
+                        exp_start: datetime, exp_end: datetime,
+                        alpha: float, output_path: str, dark_mode: bool = False):
+    """Create interactive Bokeh visualizations - one chart per method."""
+    
+    # Set body background color based on mode
+    bg_color = '#121212' if dark_mode else '#ffffff'
+    text_color = '#e0e0e0' if dark_mode else '#000000'
+    
+    charts = []
+    
+    # Create a chart for each method
     for result in results:
-        method = result['method']
-        sig = "✓" if result.get('significant', False) else "✗"
-        p_val = result.get('p_value', np.nan)
-        if not np.isnan(p_val):
-            results_text += f"{sig} {method}: p={p_val:.4f}\n"
+        method_name = result['method']
+        if 'error' in result and result['error']:
+            continue
+        
+        chart, table = create_method_chart(method_name, result, df, pre_period, exp_period,
+                                          pre_start, pre_end, exp_start, exp_end, alpha, dark_mode)
+        
+        # Add a title div for the method
+        title_style = f"color: {text_color}; background-color: {bg_color};"
+        title_div = Div(text=f"<h2 style='{title_style}'>{method_name}</h2>", width=1000, height=40)
+        
+        # Combine chart and table in a row
+        method_layout = row(chart, table)
+        
+        # Combine title and chart/table
+        full_layout = column(title_div, method_layout, sizing_mode='fixed')
+        charts.append(full_layout)
     
-    results_label = Label(x=exp_start, y=y_min + y_range*0.1,
-                         text=results_text, text_font_size='9pt', 
-                         background_fill_color='white', background_fill_alpha=0.8,
-                         text_align='left')
-    p.add_layout(results_label)
+    # Add spacing between charts and combine all charts vertically
+    final_layout = column(*charts, sizing_mode='fixed')
     
-    # Save
+    # Save with custom template for dark mode
     output_file(output_path)
-    save(p)
     
-    return p
+    if dark_mode:
+        # Inject custom CSS for dark mode
+        from bokeh.resources import CDN
+        from bokeh.embed import file_html
+        
+        html = file_html(final_layout, CDN, "Geo Test Analysis")
+        # Add dark mode styling
+        dark_css = """
+        <style>
+            body { background-color: #121212 !important; color: #e0e0e0 !important; }
+            .bk-root { background-color: #121212 !important; }
+        </style>
+        """
+        html = html.replace('</head>', dark_css + '</head>')
+        
+        with open(output_path, 'w') as f:
+            f.write(html)
+    else:
+        save(final_layout)
+    
+    return final_layout
 
 
 # ============================================================================
@@ -563,6 +910,8 @@ def main():
                        help='Output HTML file path (default: geo_test_results.html)')
     parser.add_argument('--show', action='store_true',
                        help='Open chart in browser after generation')
+    parser.add_argument('--dark-mode', action='store_true',
+                       help='Use dark mode theme for visualizations')
     
     args = parser.parse_args()
     
@@ -641,7 +990,7 @@ def main():
     try:
         create_visualization(df, pre_period, exp_period, results,
                            pre_start, pre_end, exp_start, exp_end,
-                           args.alpha, args.output)
+                           args.alpha, args.output, args.dark_mode)
         print(f"Chart saved to: {args.output}")
         
         if args.show:

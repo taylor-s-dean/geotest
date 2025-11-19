@@ -31,6 +31,16 @@ python geo_test_analyzer.py -i "E2 Geo Data FTS.csv" \
   -o output.html --show
 ```
 
+### Dark Mode
+
+```bash
+python geo_test_analyzer.py -i "E2 Geo Data FTS.csv" \
+  --pre-start "7/1/25" --pre-end "8/3/25" \
+  --exp-start "8/5/25" --exp-end "9/2/25" \
+  --method all \
+  -o output.html --show --dark-mode
+```
+
 ### Command Line Options
 
 - `-i, --input`: Path to CSV file (required)
@@ -52,6 +62,8 @@ python geo_test_analyzer.py -i "E2 Geo Data FTS.csv" \
 - `-o, --output`: Output HTML file path for interactive chart (default: `geo_test_results.html`)
 
 - `--show`: Automatically open chart in browser after generation
+
+- `--dark-mode`: Use dark mode theme for visualizations
 
 ## Statistical Methods
 
