@@ -612,7 +612,7 @@ def create_method_chart(method_name: str, result: Dict, df: pd.DataFrame,
     pre_test_mean = pre_period['test'].mean()
     pre_ratio = pre_test_mean / pre_control_mean if pre_control_mean > 0 else 1.0
     
-    # Expected test value = current control * pre-period ratio
+    # Expected test value = current control * pre-period ratio (counterfactual)
     expected_test = control_values * pre_ratio
     # % change = (actual - expected) / expected * 100
     daily_pct_dev = ((test_values - expected_test) / expected_test) * 100
@@ -622,6 +622,7 @@ def create_method_chart(method_name: str, result: Dict, df: pd.DataFrame,
         'date': dates,
         'control': control_values,
         'test': test_values,
+        'counterfactual': expected_test,
         'pct_dev': daily_pct_dev,
         'p_value': time_stats['p_values'],
         'ci_lower': time_stats['ci_lower'],
@@ -644,6 +645,7 @@ def create_method_chart(method_name: str, result: Dict, df: pd.DataFrame,
         tooltip_border = '#505050'
         control_color = '#5DA5DA'  # Lighter blue for dark mode
         test_color = '#FAA43A'     # Lighter orange for dark mode
+        counterfactual_color = '#60BD68'  # Lighter green for dark mode
     else:
         bg_color = '#ffffff'
         grid_color = '#e0e0e0'
@@ -653,6 +655,7 @@ def create_method_chart(method_name: str, result: Dict, df: pd.DataFrame,
         tooltip_border = '#ddd'
         control_color = Category10[10][0]
         test_color = Category10[10][1]
+        counterfactual_color = Category10[10][2]  # Green
     
     # Create figure
     p = figure(
@@ -703,6 +706,10 @@ def create_method_chart(method_name: str, result: Dict, df: pd.DataFrame,
                           line_width=2, color=control_color)
     test_line = p.line('date', 'test', source=source, legend_label='Test', 
                        line_width=2, color=test_color)
+    
+    # Plot counterfactual (expected test value) on main y-axis
+    p.line('date', 'counterfactual', source=source, legend_label='Counterfactual (Expected Test)', 
+           line_width=2, color=counterfactual_color, line_dash='dotted', alpha=0.8)
     
     # Plot % change on secondary y-axis
     pct_color = '#9467bd' if not dark_mode else '#c5b0d5'  # Purple color
@@ -764,6 +771,7 @@ def create_method_chart(method_name: str, result: Dict, df: pd.DataFrame,
     # Add scatter points with color coding for significance
     p.circle('date', 'control', source=source, size=4, color=control_color, alpha=0.6)
     p.circle('date', 'test', source=source, size=4, color=test_color, alpha=0.6)
+    p.circle('date', 'counterfactual', source=source, size=3, color=counterfactual_color, alpha=0.5)
     
     # Add significance indicators on test line
     sig_dates = dates[time_stats['is_significant']]
@@ -787,6 +795,7 @@ def create_method_chart(method_name: str, result: Dict, df: pd.DataFrame,
             <div style="margin-bottom: 5px;"><strong>@date_str</strong></div>
             <hr style="margin: 5px 0; border-color: {tooltip_border};">
             <div><strong>Test:</strong> @test{{0,0}}</div>
+            <div><strong>Counterfactual:</strong> @counterfactual{{0,0}}</div>
             <div><strong>Control:</strong> @control{{0,0}}</div>
             <div><strong>% Change:</strong> @pct_dev{{+0.1f}}%</div>
             <hr style="margin: 5px 0; border-color: {tooltip_border};">
