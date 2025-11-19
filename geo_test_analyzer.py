@@ -20,7 +20,7 @@ import numpy as np
 from scipy import stats
 from dateutil import parser as date_parser
 from bokeh.plotting import figure, output_file, save
-from bokeh.models import HoverTool, ColumnDataSource, Span, BoxAnnotation, Label, Div
+from bokeh.models import HoverTool, ColumnDataSource, Span, BoxAnnotation, Label, Div, LinearAxis, Range1d
 from bokeh.layouts import column, row
 from bokeh.palettes import Category10
 
@@ -688,11 +688,26 @@ def create_method_chart(method_name: str, result: Dict, df: pd.DataFrame,
                          line_dash='dashed', line_width=2)
     p.add_layout(exp_start_line)
     
-    # Plot control and test lines
+    # Set up secondary y-axis for % change
+    pct_min = daily_pct_dev.min()
+    pct_max = daily_pct_dev.max()
+    pct_range = pct_max - pct_min
+    pct_padding = pct_range * 0.1 if pct_range > 0 else 1
+    
+    p.extra_y_ranges = {"pct_change": Range1d(start=pct_min - pct_padding, end=pct_max + pct_padding)}
+    pct_axis = LinearAxis(y_range_name="pct_change", axis_label="% Change")
+    p.add_layout(pct_axis, 'right')
+    
+    # Plot control and test lines on main y-axis
     control_line = p.line('date', 'control', source=source, legend_label='Control', 
                           line_width=2, color=control_color)
     test_line = p.line('date', 'test', source=source, legend_label='Test', 
                        line_width=2, color=test_color)
+    
+    # Plot % change on secondary y-axis
+    pct_color = '#9467bd' if not dark_mode else '#c5b0d5'  # Purple color
+    p.line('date', 'pct_dev', source=source, legend_label='% Change', 
+           line_width=1.5, color=pct_color, alpha=0.7, y_range_name="pct_change", line_dash='dashed')
     
     # Add confidence interval band and significance shading (for experiment period only)
     exp_mask = (pd.to_datetime(df['date']) >= exp_start) & (pd.to_datetime(df['date']) <= exp_end)
@@ -792,6 +807,14 @@ def create_method_chart(method_name: str, result: Dict, df: pd.DataFrame,
     
     # Apply dark mode styling
     if dark_mode:
+        # Style the secondary y-axis
+        pct_axis.axis_line_color = text_color
+        pct_axis.major_tick_line_color = text_color
+        pct_axis.minor_tick_line_color = text_color
+        pct_axis.major_label_text_color = text_color
+        pct_axis.axis_label_text_color = text_color
+        
+        # Style primary axes and other elements
         p.xgrid.grid_line_color = grid_color
         p.ygrid.grid_line_color = grid_color
         p.xaxis.axis_line_color = text_color
