@@ -24,7 +24,7 @@ Geo testing is a product testing method where a test condition is applied to one
 ### Basic Usage
 
 ```bash
-python geo_test_analyzer.py -i "E2 Geo Data FTS.csv" \
+python geo_test_analyzer.py -i "your_data.csv" \
   --pre-start "7/1/25" --pre-end "8/3/25" \
   --exp-start "8/5/25" --exp-end "9/2/25" \
   --method all \
@@ -34,7 +34,7 @@ python geo_test_analyzer.py -i "E2 Geo Data FTS.csv" \
 ### Dark Mode
 
 ```bash
-python geo_test_analyzer.py -i "E2 Geo Data FTS.csv" \
+python geo_test_analyzer.py -i "your_data.csv" \
   --pre-start "7/1/25" --pre-end "8/3/25" \
   --exp-start "8/5/25" --exp-end "9/2/25" \
   --method all \
