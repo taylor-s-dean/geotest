@@ -242,9 +242,12 @@ def synthetic_control(
     # P-value from permutation test (two-tailed)
     p_value = np.mean(np.abs(permuted_effects) >= abs(treatment_effect))
 
-    # Confidence interval from permutation distribution
-    ci_lower = np.percentile(permuted_effects, alpha / 2 * 100)
-    ci_upper = np.percentile(permuted_effects, (1 - alpha / 2) * 100)
+    # Confidence interval centered on the treatment effect estimate
+    # Use standard deviation of permuted effects as estimate of standard error
+    perm_se = np.std(permuted_effects)
+    z_critical = stats.norm.ppf(1 - alpha / 2)
+    ci_lower = treatment_effect - z_critical * perm_se
+    ci_upper = treatment_effect + z_critical * perm_se
 
     # Effect size
     pooled_std = np.sqrt((pre_period["control"].var() + pre_period["test"].var()) / 2)
