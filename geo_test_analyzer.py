@@ -211,20 +211,26 @@ def synthetic_control(
     actual_exp = exp_period["test"].values
     treatment_effect = actual_exp.mean() - synthetic_exp.mean()
 
-    # Permutation test: shuffle pre-period differences
-    pre_diffs = test_pre - control_pre
+    # Permutation test: randomly assign observations to test/control
     n_permutations = 1000
     permuted_effects = []
 
+    # Combine experiment period data for permutation
+    combined_exp = np.concatenate([actual_exp, synthetic_exp])
+    n_test = len(actual_exp)
+
     for _ in range(n_permutations):
-        np.random.shuffle(pre_diffs)
-        # Simulate experiment period effect
-        perm_effect = np.random.choice(
-            pre_diffs, size=len(exp_period), replace=True
-        ).mean()
+        # Randomly permute the combined data
+        perm_indices = np.random.permutation(len(combined_exp))
+        perm_combined = combined_exp[perm_indices]
+        # Split into "test" and "control"
+        perm_test = perm_combined[:n_test]
+        perm_control = perm_combined[n_test:]
+        # Calculate permuted treatment effect
+        perm_effect = perm_test.mean() - perm_control.mean()
         permuted_effects.append(perm_effect)
 
-    # P-value from permutation test
+    # P-value from permutation test (two-tailed)
     p_value = np.mean(np.abs(permuted_effects) >= abs(treatment_effect))
 
     # Confidence interval from permutation distribution
