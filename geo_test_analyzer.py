@@ -113,14 +113,23 @@ def split_periods(
 
 
 def calculate_power(effect_size: float, n: int, alpha: float = 0.05) -> float:
-    """Calculate statistical power for a given effect size and sample size."""
+    """Calculate statistical power for a two-sample test.
+
+    Args:
+        effect_size: Cohen's d effect size
+        n: Sample size per group (assumes equal group sizes)
+        alpha: Significance level (default: 0.05)
+
+    Returns:
+        Statistical power (probability of detecting effect if it exists)
+    """
     try:
-        # Using Cohen's conventions for effect size
-        # For t-test power calculation
         from scipy.stats import norm
 
         z_alpha = norm.ppf(1 - alpha / 2)
-        z_beta = np.sqrt(n) * abs(effect_size) - z_alpha
+        # For two-sample test: effect_size * sqrt(n/2)
+        # This accounts for variance in both groups
+        z_beta = abs(effect_size) * np.sqrt(n / 2) - z_alpha
         power = norm.cdf(z_beta)
         return max(0, min(1, power))
     except:
